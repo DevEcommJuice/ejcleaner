@@ -1,26 +1,19 @@
 <div class="panel">
-    <div class="panel-heading">
-        <i class="icon-cogs"></i> {l s='Configuración del Cron' mod='ejcleaner'}
+    <h3><i class="icon-link"></i> {l s='Tarea Programada (Cron)' mod='ejcleaner'}</h3>
+    <div class="alert alert-warning">
+        {l s='Copia esta URL en Plesk para ejecutar la limpieza según la configuración anterior:' mod='ejcleaner'}
     </div>
-    
-    <div class="alert alert-info">
-        <p>{l s='Configura esta URL en Plesk (Tarea Programada -> Obtener URL) para automatizar la limpieza.' mod='ejcleaner'}</p>
+    <div class="input-group">
+        <span class="input-group-addon"><i class="icon-terminal"></i></span>
+        <input type="text" value="{$cron_url|escape:'html':'UTF-8'}" readonly onclick="this.select();" class="form-control">
     </div>
-
-    <div class="form-group">
-        <label class="control-label col-lg-3">{l s='URL del Cron' mod='ejcleaner'}</label>
-        <div class="col-lg-9">
-            <input type="text" value="{$cron_url|escape:'html':'UTF-8'}" readonly class="form-control" onclick="this.select();">
-            <p class="help-block">{l s='Ejecución recomendada: 1 vez al día (ej. 04:00 AM).' mod='ejcleaner'}</p>
+    <p class="help-block">
+        {l s='Recomendado: Una vez al día (ej. 04:00 AM).' mod='ejcleaner'}
+    </p>
+    <hr>
+    <div class="row">
+        <div class="col-xs-12 text-center">
+            <p>Desarrollado por <a href="https://www.ecommjuice.com" target="_blank"><strong>EcommJuice</strong></a></p>
         </div>
     </div>
-    <div class="clearfix"></div>
-</div>
-
-<div class="panel">
-    <div class="panel-heading">
-        <i class="icon-info"></i> {l s='Información' mod='ejcleaner'}
-    </div>
-    <p><strong>Autor:</strong> EcommJuice (<a href="https://www.ecommjuice.com/" target="_blank">www.ecommjuice.com</a>)</p>
-    <p>{l s='Este módulo vacía las tablas de conexiones y los directorios de caché de Symfony/Smarty.' mod='ejcleaner'}</p>
 </div>
