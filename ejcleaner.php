@@ -16,31 +16,37 @@ class EjCleaner extends Module
         'EJCLEANER_CLEAN_GUESTS',
         'EJCLEANER_CLEAN_CONNECTIONS',
         'EJCLEANER_CLEAN_PAGENOTFOUND',
+        'EJCLEANER_CLEAN_FACETED',
+        'EJCLEANER_CLEAN_CARTS',
+        'EJCLEANER_CART_DAYS',
     ];
 
     public function __construct()
     {
         $this->name = 'ejcleaner';
         $this->tab = 'administration';
-        $this->version = '1.1.0';
+        $this->version = '1.5.0';
         $this->author = 'EcommJuice';
         $this->need_instance = 0;
         $this->bootstrap = true;
 
         parent::__construct();
 
-        $this->displayName = $this->l('EcommJuice - Cache & DB Cleaner');
-        $this->description = $this->l('Configuración personalizada para limpieza de caché y tablas.');
+        $this->displayName = $this->l('EcommJuice - Cache & DB Cleaner Ultimate');
+        $this->description = $this->l('Mantenimiento granular: Caché, Estadísticas, Facetas y Carritos.');
         $this->ps_versions_compliancy = ['min' => '1.6.0.0', 'max' => _PS_VERSION_];
     }
 
     public function install()
     {
-        // Valores por defecto: todo activado
-        foreach ($this->config_keys as $key) {
-            Configuration::updateValue($key, 1);
+        if (Shop::isFeatureActive()) {
+            Shop::setContext(Shop::CONTEXT_ALL);
         }
-        
+
+        foreach ($this->config_keys as $key) {
+            $default = ($key === 'EJCLEANER_CART_DAYS') ? 30 : 1;
+            Configuration::updateValue($key, $default);
+        }
         Configuration::updateValue('EJCLEANER_CRON_TOKEN', Tools::passwdGen(16));
 
         return parent::install();
@@ -56,19 +62,15 @@ class EjCleaner extends Module
         return parent::uninstall();
     }
 
-    /**
-     * Gestión del Back Office
-     */
     public function getContent()
     {
         $output = '';
-
-        // Guardar configuración si se envía el formulario
         if (Tools::isSubmit('submitEjCleaner')) {
             foreach ($this->config_keys as $key) {
-                Configuration::updateValue($key, (int)Tools::getValue($key));
+                $val = Tools::getValue($key);
+                Configuration::updateValue($key, $val, false, Shop::getContextShopGroupID(), Shop::getContextShopID());
             }
-            $output .= $this->displayConfirmation($this->l('Configuración actualizada.'));
+            $output .= $this->displayConfirmation($this->l('Configuración guardada correctamente.'));
         }
 
         return $output . $this->renderForm() . $this->renderCronInfo();
@@ -79,45 +81,59 @@ class EjCleaner extends Module
         $fields_form = [
             'form' => [
                 'legend' => [
-                    'title' => $this->l('Ajustes de Limpieza'),
-                    'icon' => 'icon-cogs',
+                    'title' => $this->l('Opciones de Limpieza'),
+                    'icon' => 'icon-trash',
                 ],
                 'input' => [
                     [
                         'type' => 'switch',
-                        'label' => $this->l('Vaciar directorios de Caché'),
+                        'label' => $this->l('Limpiar Caché de archivos'),
                         'name' => 'EJCLEANER_CLEAN_CACHE',
-                        'is_bool' => true,
-                        'desc' => $this->l('Elimina archivos temporales de Smarty y Symfony.'),
-                        'values' => [['id' => 'active_on', 'value' => 1, 'label' => $this->l('Sí')], ['id' => 'active_off', 'value' => 0, 'label' => $this->l('No')]],
+                        'desc' => $this->l('Borra directorios /var/cache (1.7/8.x) o /cache/smarty (1.6).'),
+                        'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
                     ],
                     [
                         'type' => 'switch',
-                        'label' => $this->l('Vaciar ps_guest'),
+                        'label' => $this->l('Vaciar Tabla de Invitados (ps_guest)'),
                         'name' => 'EJCLEANER_CLEAN_GUESTS',
-                        'is_bool' => true,
-                        'desc' => $this->l('Elimina IDs de invitados antiguos (Recomendado).'),
                         'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
                     ],
                     [
                         'type' => 'switch',
-                        'label' => $this->l('Vaciar ps_connections'),
+                        'label' => $this->l('Vaciar Conexiones (ps_connections)'),
                         'name' => 'EJCLEANER_CLEAN_CONNECTIONS',
-                        'is_bool' => true,
-                        'desc' => $this->l('Limpia el registro histórico de conexiones y fuentes.'),
+                        'desc' => $this->l('Incluye ps_connections y ps_connections_source.'),
                         'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
                     ],
                     [
                         'type' => 'switch',
-                        'label' => $this->l('Vaciar ps_pagenotfound'),
+                        'label' => $this->l('Vaciar Logs 404 (ps_pagenotfound)'),
                         'name' => 'EJCLEANER_CLEAN_PAGENOTFOUND',
-                        'is_bool' => true,
-                        'desc' => $this->l('Elimina el log de errores 404 registrados en la DB.'),
                         'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
+                    ],
+                    [
+                        'type' => 'switch',
+                        'label' => $this->l('Optimizar Faceted Search'),
+                        'name' => 'EJCLEANER_CLEAN_FACETED',
+                        'desc' => $this->l('Limpia el índice de precios de productos inexistentes o desactivados.'),
+                        'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
+                    ],
+                    [
+                        'type' => 'switch',
+                        'label' => $this->l('Vaciar Carritos Abandonados'),
+                        'name' => 'EJCLEANER_CLEAN_CARTS',
+                        'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
+                    ],
+                    [
+                        'type' => 'text',
+                        'label' => $this->l('Días de antigüedad para carritos'),
+                        'name' => 'EJCLEANER_CART_DAYS',
+                        'class' => 'fixed-width-xs',
+                        'suffix' => $this->l('días'),
                     ],
                 ],
                 'submit' => [
-                    'title' => $this->l('Guardar'),
+                    'title' => $this->l('Guardar Configuración'),
                     'class' => 'btn btn-default pull-right'
                 ],
             ],
@@ -129,7 +145,6 @@ class EjCleaner extends Module
         $helper->token = Tools::getAdminTokenLite('AdminModules');
         $helper->currentIndex = AdminController::$currentIndex . '&configure=' . $this->name;
         $helper->default_form_language = (int)Configuration::get('PS_LANG_DEFAULT');
-        $helper->allow_callbacks = true;
         $helper->title = $this->displayName;
         $helper->submit_action = 'submitEjCleaner';
 
@@ -143,20 +158,17 @@ class EjCleaner extends Module
     protected function renderCronInfo()
     {
         $token = Configuration::get('EJCLEANER_CRON_TOKEN');
-        $cronUrl = $this->context->link->getModuleLink($this->name, 'cron', ['token' => $token], true);
-
+        $cronUrl = $this->context->link->getModuleLink($this->name, 'cron', ['token' => $token, 'id_shop' => (int)$this->context->shop->id], true);
         $this->context->smarty->assign(['cron_url' => $cronUrl]);
         return $this->display(__FILE__, 'views/templates/admin/configure.tpl');
     }
 
-    /**
-     * Lógica de limpieza con validación de configuración
-     */
-    public function executeCleaning()
+    public function executeCleaning($id_shop = null)
     {
+        $id_shop = (int)($id_shop ?: Context::getContext()->shop->id);
         $db = Db::getInstance();
 
-        // Limpieza de Tablas
+        // 1. Limpiezas Globales (Truncate) - Basado en Checkboxes
         $tableMapping = [
             'EJCLEANER_CLEAN_GUESTS' => ['guest'],
             'EJCLEANER_CLEAN_CONNECTIONS' => ['connections', 'connections_source'],
@@ -164,24 +176,70 @@ class EjCleaner extends Module
         ];
 
         foreach ($tableMapping as $configKey => $tables) {
-            if ((int)Configuration::get($configKey)) {
+            if ((int)Configuration::get($configKey, null, null, $id_shop)) {
                 foreach ($tables as $table) {
                     $db->execute('TRUNCATE TABLE `' . _DB_PREFIX_ . pSQL($table) . '`');
                 }
             }
         }
 
-        // Limpieza de Directorios
-        if ((int)Configuration::get('EJCLEANER_CLEAN_CACHE')) {
-            $paths = (version_compare(_PS_VERSION_, '1.7.0.0', '>=')) 
-                ? [_PS_ROOT_DIR_ . '/var/cache/prod', _PS_ROOT_DIR_ . '/var/cache/dev']
-                : [_PS_ROOT_DIR_ . '/cache/smarty/compile', _PS_ROOT_DIR_ . '/cache/smarty/cache'];
+        // 2. Limpieza Quirúrgica de Facetas
+        if ((int)Configuration::get('EJCLEANER_CLEAN_FACETED', null, null, $id_shop)) {
+            $this->optimizeFacetedIndex($id_shop);
+        }
 
-            foreach ($paths as $path) {
-                if (is_dir($path)) {
-                    $this->recursiveDelete($path);
-                }
-            }
+        // 3. Limpieza de Carritos Abandonados
+        if ((int)Configuration::get('EJCLEANER_CLEAN_CARTS', null, null, $id_shop)) {
+            $this->cleanAbandonedCarts($id_shop);
+        }
+
+        // 4. Limpieza de Caché de Archivos
+        if ((int)Configuration::get('EJCLEANER_CLEAN_CACHE', null, null, $id_shop)) {
+            $this->deleteCacheFiles();
+        }
+    }
+
+    private function optimizeFacetedIndex($id_shop)
+    {
+        $db = Db::getInstance();
+        $table = _DB_PREFIX_ . 'layered_price_index';
+        $check = $db->executeS("SHOW TABLES LIKE '".$table."'");
+        if (empty($check)) return;
+
+        $hasAttr = (bool)$db->getValue('SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME="'.$table.'" AND COLUMN_NAME="id_product_attribute"');
+
+        $sql = 'DELETE lpi FROM '.$table.' lpi LEFT JOIN '._DB_PREFIX_.'product p ON p.id_product = lpi.id_product';
+        if ($hasAttr) {
+            $sql .= ' LEFT JOIN '._DB_PREFIX_.'product_attribute pa ON pa.id_product_attribute = lpi.id_product_attribute';
+            $sql .= ' WHERE p.id_product IS NULL OR p.active = 0 OR (lpi.id_product_attribute > 0 AND pa.id_product_attribute IS NULL)';
+        } else {
+            $sql .= ' WHERE p.id_product IS NULL OR p.active = 0';
+        }
+        $sql .= ' AND lpi.id_shop = '.(int)$id_shop;
+
+        $db->execute($sql);
+        $db->execute('OPTIMIZE TABLE '.$table);
+    }
+
+    private function cleanAbandonedCarts($id_shop)
+    {
+        $db = Db::getInstance();
+        $days = (int)Configuration::get('EJCLEANER_CART_DAYS', null, null, $id_shop) ?: 30;
+        
+        $sql = 'DELETE c FROM '._DB_PREFIX_.'cart c LEFT JOIN '._DB_PREFIX_.'orders o ON c.id_cart = o.id_cart
+                WHERE o.id_cart IS NULL AND c.date_add < DATE_SUB(NOW(), INTERVAL '.(int)$days.' DAY) AND c.id_shop = '.(int)$id_shop;
+        $db->execute($sql);
+        $db->execute('DELETE cp FROM '._DB_PREFIX_.'cart_product cp LEFT JOIN '._DB_PREFIX_.'cart c ON cp.id_cart = c.id_cart WHERE c.id_cart IS NULL');
+    }
+
+    private function deleteCacheFiles()
+    {
+        $paths = (version_compare(_PS_VERSION_, '1.7.0.0', '>=')) 
+            ? [_PS_ROOT_DIR_ . '/var/cache/prod', _PS_ROOT_DIR_ . '/var/cache/dev']
+            : [_PS_ROOT_DIR_ . '/cache/smarty/compile', _PS_ROOT_DIR_ . '/cache/smarty/cache'];
+
+        foreach ($paths as $path) {
+            if (is_dir($path)) $this->recursiveDelete($path);
         }
     }
 
