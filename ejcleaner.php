@@ -25,7 +25,7 @@ class EjCleaner extends Module
     {
         $this->name = 'ejcleaner';
         $this->tab = 'administration';
-        $this->version = '1.5.0';
+        $this->version = '1.5.1';
         $this->author = 'EcommJuice';
         $this->need_instance = 0;
         $this->bootstrap = true;
@@ -203,22 +203,41 @@ class EjCleaner extends Module
     {
         $db = Db::getInstance();
         $table = _DB_PREFIX_ . 'layered_price_index';
-        $check = $db->executeS("SHOW TABLES LIKE '".$table."'");
-        if (empty($check)) return;
-
-        $hasAttr = (bool)$db->getValue('SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME="'.$table.'" AND COLUMN_NAME="id_product_attribute"');
-
-        $sql = 'DELETE lpi FROM '.$table.' lpi LEFT JOIN '._DB_PREFIX_.'product p ON p.id_product = lpi.id_product';
-        if ($hasAttr) {
-            $sql .= ' LEFT JOIN '._DB_PREFIX_.'product_attribute pa ON pa.id_product_attribute = lpi.id_product_attribute';
-            $sql .= ' WHERE p.id_product IS NULL OR p.active = 0 OR (lpi.id_product_attribute > 0 AND pa.id_product_attribute IS NULL)';
-        } else {
-            $sql .= ' WHERE p.id_product IS NULL OR p.active = 0';
+        $check = $db->executeS("SHOW TABLES LIKE '" . pSQL($table) . "'");
+        if (empty($check)) {
+            return;
         }
-        $sql .= ' AND lpi.id_shop = '.(int)$id_shop;
+
+        $hasAttr = (bool)$db->getValue(
+            'SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = "' . pSQL($table) . '"
+              AND COLUMN_NAME = "id_product_attribute"'
+        );
+
+        $sql = 'DELETE lpi
+            FROM `' . pSQL($table) . '` lpi
+            LEFT JOIN `' . _DB_PREFIX_ . 'product` p ON p.id_product = lpi.id_product';
+        if ($hasAttr) {
+            $sql .= ' LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute` pa ON pa.id_product_attribute = lpi.id_product_attribute
+                WHERE (
+                    p.id_product IS NULL
+                    OR p.active = 0
+                    OR (lpi.id_product_attribute > 0 AND pa.id_product_attribute IS NULL)
+                )';
+        } else {
+            $sql .= ' LEFT JOIN `' . _DB_PREFIX_ . 'product_attribute` pa ON pa.id_product = lpi.id_product
+                WHERE (
+                    p.id_product IS NULL
+                    OR p.active = 0
+                    OR pa.id_product IS NULL
+                )';
+        }
+        $sql .= ' AND lpi.id_shop = ' . (int)$id_shop;
 
         $db->execute($sql);
-        $db->execute('OPTIMIZE TABLE '.$table);
+        $db->execute('OPTIMIZE TABLE `' . pSQL($table) . '`');
     }
 
     private function cleanAbandonedCarts($id_shop)
