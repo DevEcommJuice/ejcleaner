@@ -171,7 +171,7 @@ class EjCleaner extends Module
         // 1. Limpiezas Globales (Truncate) - Basado en Checkboxes
         $tableMapping = [
             'EJCLEANER_CLEAN_GUESTS' => ['guest'],
-            'EJCLEANER_CLEAN_CONNECTIONS' => ['connections', 'connections_source'],
+            'EJCLEANER_CLEAN_CONNECTIONS' => ['connections', 'connections_source', 'referrer_cache'], // <-- Añadida esta tabla aquí
             'EJCLEANER_CLEAN_PAGENOTFOUND' => ['pagenotfound'],
         ];
 
