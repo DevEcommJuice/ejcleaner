@@ -25,7 +25,7 @@ class EjCleaner extends Module
     {
         $this->name = 'ejcleaner';
         $this->tab = 'administration';
-        $this->version = '1.5.1';
+        $this->version = '1.5.2';
         $this->author = 'EcommJuice';
         $this->need_instance = 0;
         $this->bootstrap = true;
@@ -102,7 +102,7 @@ class EjCleaner extends Module
                         'type' => 'switch',
                         'label' => $this->l('Vaciar Conexiones (ps_connections)'),
                         'name' => 'EJCLEANER_CLEAN_CONNECTIONS',
-                        'desc' => $this->l('Incluye ps_connections y ps_connections_source.'),
+                        'desc' => $this->l('Incluye ps_connections, ps_connections_source y ps_referrer_cache si existe.'),
                         'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
                     ],
                     [
@@ -113,15 +113,16 @@ class EjCleaner extends Module
                     ],
                     [
                         'type' => 'switch',
-                        'label' => $this->l('Optimizar Faceted Search'),
+                        'label' => $this->l('Optimizar Faceted Search (ps_layered_price_index)'),
                         'name' => 'EJCLEANER_CLEAN_FACETED',
                         'desc' => $this->l('Limpia el índice de precios de productos inexistentes o desactivados.'),
                         'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
                     ],
                     [
                         'type' => 'switch',
-                        'label' => $this->l('Vaciar Carritos Abandonados'),
+                        'label' => $this->l('Vaciar Carritos Abandonados (ps_cart, ps_cart_product)'),
                         'name' => 'EJCLEANER_CLEAN_CARTS',
+                        'desc' => $this->l('Elimina carritos sin pedido y limpia ps_cart_product huerfana.'),
                         'values' => [['id' => 'active_on', 'value' => 1], ['id' => 'active_off', 'value' => 0]],
                     ],
                     [
@@ -178,7 +179,9 @@ class EjCleaner extends Module
         foreach ($tableMapping as $configKey => $tables) {
             if ((int)Configuration::get($configKey, null, null, $id_shop)) {
                 foreach ($tables as $table) {
-                    $db->execute('TRUNCATE TABLE `' . _DB_PREFIX_ . pSQL($table) . '`');
+                    if ($this->tableExists($table)) {
+                        $db->execute('TRUNCATE TABLE `' . _DB_PREFIX_ . pSQL($table) . '`');
+                    }
                 }
             }
         }
@@ -197,6 +200,16 @@ class EjCleaner extends Module
         if ((int)Configuration::get('EJCLEANER_CLEAN_CACHE', null, null, $id_shop)) {
             $this->deleteCacheFiles();
         }
+    }
+
+    private function tableExists($table)
+    {
+        return (bool)Db::getInstance()->getValue(
+            'SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = \'' . pSQL(_DB_PREFIX_ . $table) . '\''
+        );
     }
 
     private function optimizeFacetedIndex($id_shop)
