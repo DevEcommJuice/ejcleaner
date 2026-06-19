@@ -167,9 +167,9 @@ class EjCleaner extends Module
     public function executeCleaning($id_shop = null)
     {
         $id_shop = (int)($id_shop ?: Context::getContext()->shop->id);
-        $db = Db::getInstance();
+        $lines = [];
 
-        // 1. Limpiezas Globales (Truncate) - tablas hijas antes que padres para respetar FK
+        // 1. Truncates - tablas hijas antes que padres para respetar FK
         $tableMapping = [
             'EJCLEANER_CLEAN_CONNECTIONS' => ['connections_page', 'connections_source', 'connections', 'referrer_cache'],
             'EJCLEANER_CLEAN_PAGENOTFOUND' => ['pagenotfound'],
@@ -179,30 +179,43 @@ class EjCleaner extends Module
             if ((int)Configuration::get($configKey, null, null, $id_shop)) {
                 foreach ($tables as $table) {
                     if ($this->tableExists($table)) {
-                        $db->execute('TRUNCATE TABLE `' . _DB_PREFIX_ . pSQL($table) . '`');
+                        $stats = $this->truncateWithStats($table);
+                        $lines[] = _DB_PREFIX_ . $table . ': ' . $stats['rows'] . ' filas (' . $this->formatSize($stats['size_kb']) . ')';
                     }
                 }
             }
         }
 
-        // 2. Limpieza Selectiva de Invitados (solo los que no tienen carrito ni pedido)
-        if ((int)Configuration::get('EJCLEANER_CLEAN_GUESTS', null, null, $id_shop)) {
-            $this->cleanGuests();
-        }
-
-        // 3. Limpieza Quirúrgica de Facetas
-        if ((int)Configuration::get('EJCLEANER_CLEAN_FACETED', null, null, $id_shop)) {
-            $this->optimizeFacetedIndex($id_shop);
-        }
-
-        // 4. Limpieza de Carritos Abandonados
+        // 2. Limpieza de Carritos Abandonados (antes que guests para liberar referencias)
         if ((int)Configuration::get('EJCLEANER_CLEAN_CARTS', null, null, $id_shop)) {
-            $this->cleanAbandonedCarts($id_shop);
+            $result = $this->cleanAbandonedCarts($id_shop);
+            $lines[] = _DB_PREFIX_ . 'cart: ' . $result['carts'] . ' eliminados | '
+                . _DB_PREFIX_ . 'cart_product: ' . $result['cart_products'] . ' huérfanos';
+        }
+
+        // 3. Limpieza Selectiva de Invitados (después de carritos para que no queden referencias)
+        if ((int)Configuration::get('EJCLEANER_CLEAN_GUESTS', null, null, $id_shop)) {
+            $deleted = $this->cleanGuests();
+            $lines[] = _DB_PREFIX_ . 'guest: ' . $deleted . ' filas eliminadas';
+        }
+
+        // 4. Limpieza Quirúrgica de Facetas
+        if ((int)Configuration::get('EJCLEANER_CLEAN_FACETED', null, null, $id_shop)) {
+            $deleted = $this->optimizeFacetedIndex($id_shop);
+            $lines[] = _DB_PREFIX_ . 'layered_price_index: ' . $deleted . ' filas eliminadas';
         }
 
         // 5. Limpieza de Caché de Archivos
         if ((int)Configuration::get('EJCLEANER_CLEAN_CACHE', null, null, $id_shop)) {
             $this->deleteCacheFiles();
+            $lines[] = 'Caché de archivos limpiada';
+        }
+
+        if (!empty($lines)) {
+            PrestaShopLogger::addLog(
+                '[EjCleaner] Tienda #' . $id_shop . ' | ' . implode(' | ', $lines),
+                1, null, null, null, true
+            );
         }
     }
 
@@ -216,13 +229,35 @@ class EjCleaner extends Module
         );
     }
 
+    private function truncateWithStats($table)
+    {
+        $db = Db::getInstance();
+        $fullTable = pSQL(_DB_PREFIX_ . $table);
+        $rows = (int)$db->getValue('SELECT COUNT(*) FROM `' . $fullTable . '`');
+        $sizeKb = (float)$db->getValue(
+            'SELECT ROUND((data_length + index_length) / 1024, 2)
+             FROM INFORMATION_SCHEMA.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = \'' . $fullTable . '\''
+        );
+        $db->execute('TRUNCATE TABLE `' . $fullTable . '`');
+        return ['rows' => $rows, 'size_kb' => $sizeKb];
+    }
+
+    private function formatSize($kb)
+    {
+        if ($kb >= 1024) {
+            return round($kb / 1024, 2) . ' MB';
+        }
+        return round($kb, 2) . ' KB';
+    }
+
     private function optimizeFacetedIndex($id_shop)
     {
         $db = Db::getInstance();
         $table = _DB_PREFIX_ . 'layered_price_index';
         $check = $db->executeS("SHOW TABLES LIKE '" . pSQL($table) . "'");
         if (empty($check)) {
-            return;
+            return 0;
         }
 
         $hasAttr = (bool)$db->getValue(
@@ -253,30 +288,58 @@ class EjCleaner extends Module
         }
         $sql .= ' AND lpi.id_shop = ' . (int)$id_shop;
 
+        $before = (int)$db->getValue('SELECT COUNT(*) FROM `' . pSQL($table) . '`');
         $db->execute($sql);
+        $after = (int)$db->getValue('SELECT COUNT(*) FROM `' . pSQL($table) . '`');
         $db->execute('OPTIMIZE TABLE `' . pSQL($table) . '`');
+
+        return $before - $after;
     }
 
     private function cleanGuests()
     {
-        Db::getInstance()->execute(
+        $db = Db::getInstance();
+        $before = (int)$db->getValue('SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'guest`');
+        $db->execute(
             'DELETE g FROM `' . _DB_PREFIX_ . 'guest` g
             LEFT JOIN `' . _DB_PREFIX_ . 'cart` c ON c.id_guest = g.id_guest
             LEFT JOIN `' . _DB_PREFIX_ . 'orders` o ON o.id_guest = g.id_guest
             WHERE c.id_guest IS NULL
-              AND o.id_guest IS NULL'
+              AND o.id_guest IS NULL
+              AND (g.id_customer IS NULL OR g.id_customer = 0)'
         );
+        $db->execute('OPTIMIZE TABLE `' . _DB_PREFIX_ . 'guest`');
+        $after = (int)$db->getValue('SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'guest`');
+        return $before - $after;
     }
 
     private function cleanAbandonedCarts($id_shop)
     {
         $db = Db::getInstance();
         $days = (int)Configuration::get('EJCLEANER_CART_DAYS', null, null, $id_shop) ?: 30;
-        
-        $sql = 'DELETE c FROM '._DB_PREFIX_.'cart c LEFT JOIN '._DB_PREFIX_.'orders o ON c.id_cart = o.id_cart
-                WHERE o.id_cart IS NULL AND c.date_add < DATE_SUB(NOW(), INTERVAL '.(int)$days.' DAY) AND c.id_shop = '.(int)$id_shop;
-        $db->execute($sql);
-        $db->execute('DELETE cp FROM '._DB_PREFIX_.'cart_product cp LEFT JOIN '._DB_PREFIX_.'cart c ON cp.id_cart = c.id_cart WHERE c.id_cart IS NULL');
+
+        $beforeCarts = (int)$db->getValue('SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'cart`');
+        $db->execute(
+            'DELETE c FROM `' . _DB_PREFIX_ . 'cart` c
+             LEFT JOIN `' . _DB_PREFIX_ . 'orders` o ON c.id_cart = o.id_cart
+             WHERE o.id_cart IS NULL
+               AND c.date_add < DATE_SUB(NOW(), INTERVAL ' . (int)$days . ' DAY)
+               AND c.id_shop = ' . (int)$id_shop
+        );
+        $afterCarts = (int)$db->getValue('SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'cart`');
+
+        $beforeCp = (int)$db->getValue('SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'cart_product`');
+        $db->execute(
+            'DELETE cp FROM `' . _DB_PREFIX_ . 'cart_product` cp
+             LEFT JOIN `' . _DB_PREFIX_ . 'cart` c ON cp.id_cart = c.id_cart
+             WHERE c.id_cart IS NULL'
+        );
+        $afterCp = (int)$db->getValue('SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'cart_product`');
+
+        return [
+            'carts' => $beforeCarts - $afterCarts,
+            'cart_products' => $beforeCp - $afterCp,
+        ];
     }
 
     private function deleteCacheFiles()
