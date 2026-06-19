@@ -289,8 +289,10 @@ class EjCleaner extends Module
                 return $this->l('Caché de archivos limpiada.');
 
             case 'guests':
-                $n = $this->cleanGuests();
-                return number_format($n, 0, ',', '.') . ' ' . $this->l('registros eliminados de') . ' ' . _DB_PREFIX_ . 'guest.';
+                $cartResult = $this->cleanAbandonedCarts($id_shop);
+                $guestDeleted = $this->cleanGuests();
+                return number_format($cartResult['carts'], 0, ',', '.') . ' ' . $this->l('carritos eliminados')
+                    . ' | ' . number_format($guestDeleted, 0, ',', '.') . ' ' . $this->l('guests eliminados');
 
             case 'connections':
                 $parts = [];
@@ -535,9 +537,7 @@ class EjCleaner extends Module
         $db->execute(
             'DELETE g FROM `' . _DB_PREFIX_ . 'guest` g
             LEFT JOIN `' . _DB_PREFIX_ . 'cart` c ON c.id_guest = g.id_guest
-            LEFT JOIN `' . _DB_PREFIX_ . 'orders` o ON o.id_guest = g.id_guest
             WHERE c.id_guest IS NULL
-              AND o.id_guest IS NULL
               AND (g.id_customer IS NULL OR g.id_customer = 0)'
         );
         $db->execute('OPTIMIZE TABLE `' . _DB_PREFIX_ . 'guest`');
