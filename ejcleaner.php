@@ -64,6 +64,10 @@ class EjCleaner extends Module
 
     public function getContent()
     {
+        if (Tools::getValue('ajax') && Tools::getValue('ejcleaner_action')) {
+            $this->handleAjaxClean();
+        }
+
         $output = '';
         if (Tools::isSubmit('submitEjCleaner')) {
             foreach ($this->config_keys as $key) {
@@ -73,7 +77,7 @@ class EjCleaner extends Module
             $output .= $this->displayConfirmation($this->l('Configuración guardada correctamente.'));
         }
 
-        return $output . $this->renderForm() . $this->renderCronInfo();
+        return $output . $this->renderInfoPanel() . $this->renderForm() . $this->renderCronInfo();
     }
 
     protected function renderForm()
@@ -156,12 +160,237 @@ class EjCleaner extends Module
         return $helper->generateForm([$fields_form]);
     }
 
+    protected function renderInfoPanel()
+    {
+        $id_shop = (int)$this->context->shop->id;
+        $ajaxUrl = AdminController::$currentIndex . '&configure=' . $this->name
+            . '&token=' . Tools::getAdminTokenLite('AdminModules');
+
+        $stats      = $this->getTableStatsForDisplay();
+        $cacheBytes = $this->getCacheSize();
+
+        $groups = [
+            [
+                'action'  => 'cache',
+                'label'   => $this->l('Caché de archivos'),
+                'tables'  => version_compare(_PS_VERSION_, '1.7.0.0', '>=') ? '/var/cache' : '/cache/smarty',
+                'rows'    => '',
+                'size'    => $this->formatSizeBytes($cacheBytes),
+                'enabled' => (bool)Configuration::get('EJCLEANER_CLEAN_CACHE', null, null, $id_shop),
+            ],
+            [
+                'action'  => 'guests',
+                'label'   => $this->l('Invitados'),
+                'tables'  => _DB_PREFIX_ . 'guest',
+                'rows'    => number_format(isset($stats['guest']) ? $stats['guest']['rows'] : 0, 0, ',', '.'),
+                'size'    => $this->formatSize(isset($stats['guest']) ? $stats['guest']['size_kb'] : 0),
+                'enabled' => (bool)Configuration::get('EJCLEANER_CLEAN_GUESTS', null, null, $id_shop),
+            ],
+            [
+                'action'  => 'connections',
+                'label'   => $this->l('Conexiones'),
+                'tables'  => _DB_PREFIX_ . 'connections + page + source',
+                'rows'    => number_format(
+                    (isset($stats['connections']) ? $stats['connections']['rows'] : 0)
+                    + (isset($stats['connections_page']) ? $stats['connections_page']['rows'] : 0)
+                    + (isset($stats['connections_source']) ? $stats['connections_source']['rows'] : 0),
+                    0, ',', '.'
+                ),
+                'size'    => $this->formatSize(
+                    (isset($stats['connections']) ? $stats['connections']['size_kb'] : 0)
+                    + (isset($stats['connections_page']) ? $stats['connections_page']['size_kb'] : 0)
+                    + (isset($stats['connections_source']) ? $stats['connections_source']['size_kb'] : 0)
+                    + (isset($stats['referrer_cache']) ? $stats['referrer_cache']['size_kb'] : 0)
+                ),
+                'enabled' => (bool)Configuration::get('EJCLEANER_CLEAN_CONNECTIONS', null, null, $id_shop),
+            ],
+            [
+                'action'  => 'pagenotfound',
+                'label'   => $this->l('Logs 404'),
+                'tables'  => _DB_PREFIX_ . 'pagenotfound',
+                'rows'    => number_format(isset($stats['pagenotfound']) ? $stats['pagenotfound']['rows'] : 0, 0, ',', '.'),
+                'size'    => $this->formatSize(isset($stats['pagenotfound']) ? $stats['pagenotfound']['size_kb'] : 0),
+                'enabled' => (bool)Configuration::get('EJCLEANER_CLEAN_PAGENOTFOUND', null, null, $id_shop),
+            ],
+            [
+                'action'  => 'faceted',
+                'label'   => $this->l('Faceted Search'),
+                'tables'  => _DB_PREFIX_ . 'layered_price_index',
+                'rows'    => number_format(isset($stats['layered_price_index']) ? $stats['layered_price_index']['rows'] : 0, 0, ',', '.'),
+                'size'    => $this->formatSize(isset($stats['layered_price_index']) ? $stats['layered_price_index']['size_kb'] : 0),
+                'enabled' => (bool)Configuration::get('EJCLEANER_CLEAN_FACETED', null, null, $id_shop),
+            ],
+            [
+                'action'  => 'carts',
+                'label'   => $this->l('Carritos abandonados'),
+                'tables'  => _DB_PREFIX_ . 'cart + ' . _DB_PREFIX_ . 'cart_product',
+                'rows'    => number_format(
+                    (isset($stats['cart']) ? $stats['cart']['rows'] : 0)
+                    + (isset($stats['cart_product']) ? $stats['cart_product']['rows'] : 0),
+                    0, ',', '.'
+                ),
+                'size'    => $this->formatSize(
+                    (isset($stats['cart']) ? $stats['cart']['size_kb'] : 0)
+                    + (isset($stats['cart_product']) ? $stats['cart_product']['size_kb'] : 0)
+                ),
+                'enabled' => (bool)Configuration::get('EJCLEANER_CLEAN_CARTS', null, null, $id_shop),
+            ],
+        ];
+
+        $this->context->smarty->assign([
+            'ejcleaner_groups'   => $groups,
+            'ejcleaner_ajax_url' => $ajaxUrl,
+            'ejcleaner_shop_id'  => $id_shop,
+        ]);
+
+        return $this->display(__FILE__, 'views/templates/admin/status.tpl');
+    }
+
     protected function renderCronInfo()
     {
         $token = Configuration::get('EJCLEANER_CRON_TOKEN');
         $cronUrl = $this->context->link->getModuleLink($this->name, 'cron', ['token' => $token, 'id_shop' => (int)$this->context->shop->id], true);
         $this->context->smarty->assign(['cron_url' => $cronUrl]);
         return $this->display(__FILE__, 'views/templates/admin/configure.tpl');
+    }
+
+    private function handleAjaxClean()
+    {
+        $allowed = ['all', 'cache', 'guests', 'connections', 'pagenotfound', 'faceted', 'carts'];
+        $action  = Tools::getValue('ejcleaner_action');
+        $id_shop = (int)(Tools::getValue('id_shop') ?: Context::getContext()->shop->id);
+
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+        header('Content-Type: application/json');
+
+        if (!in_array($action, $allowed)) {
+            die(json_encode(['success' => false, 'message' => 'Acción no válida.']));
+        }
+
+        try {
+            $message = $this->executeCleaningGroup($action, $id_shop);
+            die(json_encode(['success' => true, 'message' => $message]));
+        } catch (Exception $e) {
+            die(json_encode(['success' => false, 'message' => $e->getMessage()]));
+        }
+    }
+
+    private function executeCleaningGroup($action, $id_shop)
+    {
+        switch ($action) {
+            case 'all':
+                $this->executeCleaning($id_shop);
+                return $this->l('Limpieza completa ejecutada correctamente.');
+
+            case 'cache':
+                $this->deleteCacheFiles();
+                return $this->l('Caché de archivos limpiada.');
+
+            case 'guests':
+                $n = $this->cleanGuests();
+                return number_format($n, 0, ',', '.') . ' ' . $this->l('registros eliminados de') . ' ' . _DB_PREFIX_ . 'guest.';
+
+            case 'connections':
+                $parts = [];
+                foreach (['connections_page', 'connections_source', 'connections', 'referrer_cache'] as $table) {
+                    if ($this->tableExists($table)) {
+                        $s = $this->truncateWithStats($table);
+                        $parts[] = _DB_PREFIX_ . $table . ': ' . number_format($s['rows'], 0, ',', '.') . ' filas';
+                    }
+                }
+                return implode(' | ', $parts);
+
+            case 'pagenotfound':
+                if ($this->tableExists('pagenotfound')) {
+                    $s = $this->truncateWithStats('pagenotfound');
+                    return number_format($s['rows'], 0, ',', '.') . ' ' . $this->l('filas eliminadas de') . ' ' . _DB_PREFIX_ . 'pagenotfound.';
+                }
+                return $this->l('Tabla no encontrada.');
+
+            case 'faceted':
+                $n = $this->optimizeFacetedIndex($id_shop);
+                return number_format($n, 0, ',', '.') . ' ' . $this->l('registros eliminados de') . ' ' . _DB_PREFIX_ . 'layered_price_index.';
+
+            case 'carts':
+                $r = $this->cleanAbandonedCarts($id_shop);
+                return number_format($r['carts'], 0, ',', '.') . ' ' . $this->l('carritos y')
+                    . ' ' . number_format($r['cart_products'], 0, ',', '.') . ' ' . $this->l('líneas de carrito eliminados.');
+        }
+    }
+
+    private function getTableStatsForDisplay()
+    {
+        $tables = [
+            'guest', 'connections', 'connections_page', 'connections_source',
+            'referrer_cache', 'pagenotfound', 'layered_price_index', 'cart', 'cart_product',
+        ];
+
+        $inList = implode(',', array_map(function ($t) {
+            return "'" . pSQL(_DB_PREFIX_ . $t) . "'";
+        }, $tables));
+
+        $rows = Db::getInstance()->executeS(
+            'SELECT TABLE_NAME, TABLE_ROWS, ROUND((data_length + index_length) / 1024, 2) AS size_kb
+             FROM INFORMATION_SCHEMA.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (' . $inList . ')'
+        );
+
+        $result = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $key = str_replace(_DB_PREFIX_, '', $row['TABLE_NAME']);
+                $result[$key] = ['rows' => (int)$row['TABLE_ROWS'], 'size_kb' => (float)$row['size_kb']];
+            }
+        }
+        return $result;
+    }
+
+    private function getCacheSize()
+    {
+        $paths = version_compare(_PS_VERSION_, '1.7.0.0', '>=')
+            ? [_PS_ROOT_DIR_ . '/var/cache/prod', _PS_ROOT_DIR_ . '/var/cache/dev']
+            : [_PS_ROOT_DIR_ . '/cache/smarty/compile', _PS_ROOT_DIR_ . '/cache/smarty/cache'];
+
+        $bytes = 0;
+        foreach ($paths as $path) {
+            if (is_dir($path)) {
+                $bytes += $this->dirSize($path);
+            }
+        }
+        return $bytes;
+    }
+
+    private function dirSize($dir)
+    {
+        $bytes = 0;
+        try {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($it as $file) {
+                if ($file->isFile()) {
+                    $bytes += $file->getSize();
+                }
+            }
+        } catch (Exception $e) {
+        }
+        return $bytes;
+    }
+
+    private function formatSizeBytes($bytes)
+    {
+        if ($bytes >= 1073741824) {
+            return round($bytes / 1073741824, 2) . ' GB';
+        }
+        if ($bytes >= 1048576) {
+            return round($bytes / 1048576, 2) . ' MB';
+        }
+        if ($bytes >= 1024) {
+            return round($bytes / 1024, 2) . ' KB';
+        }
+        return $bytes . ' B';
     }
 
     public function executeCleaning($id_shop = null)
@@ -245,6 +474,9 @@ class EjCleaner extends Module
 
     private function formatSize($kb)
     {
+        if ($kb >= 1048576) {
+            return round($kb / 1048576, 2) . ' GB';
+        }
         if ($kb >= 1024) {
             return round($kb / 1024, 2) . ' MB';
         }
