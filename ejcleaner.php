@@ -169,10 +169,9 @@ class EjCleaner extends Module
         $id_shop = (int)($id_shop ?: Context::getContext()->shop->id);
         $db = Db::getInstance();
 
-        // 1. Limpiezas Globales (Truncate) - Basado en Checkboxes
+        // 1. Limpiezas Globales (Truncate) - tablas hijas antes que padres para respetar FK
         $tableMapping = [
-            'EJCLEANER_CLEAN_GUESTS' => ['guest'],
-            'EJCLEANER_CLEAN_CONNECTIONS' => ['connections', 'connections_source', 'referrer_cache'], // <-- Añadida esta tabla aquí
+            'EJCLEANER_CLEAN_CONNECTIONS' => ['connections_page', 'connections_source', 'connections', 'referrer_cache'],
             'EJCLEANER_CLEAN_PAGENOTFOUND' => ['pagenotfound'],
         ];
 
@@ -186,17 +185,22 @@ class EjCleaner extends Module
             }
         }
 
-        // 2. Limpieza Quirúrgica de Facetas
+        // 2. Limpieza Selectiva de Invitados (solo los que no tienen carrito ni pedido)
+        if ((int)Configuration::get('EJCLEANER_CLEAN_GUESTS', null, null, $id_shop)) {
+            $this->cleanGuests();
+        }
+
+        // 3. Limpieza Quirúrgica de Facetas
         if ((int)Configuration::get('EJCLEANER_CLEAN_FACETED', null, null, $id_shop)) {
             $this->optimizeFacetedIndex($id_shop);
         }
 
-        // 3. Limpieza de Carritos Abandonados
+        // 4. Limpieza de Carritos Abandonados
         if ((int)Configuration::get('EJCLEANER_CLEAN_CARTS', null, null, $id_shop)) {
             $this->cleanAbandonedCarts($id_shop);
         }
 
-        // 4. Limpieza de Caché de Archivos
+        // 5. Limpieza de Caché de Archivos
         if ((int)Configuration::get('EJCLEANER_CLEAN_CACHE', null, null, $id_shop)) {
             $this->deleteCacheFiles();
         }
@@ -251,6 +255,17 @@ class EjCleaner extends Module
 
         $db->execute($sql);
         $db->execute('OPTIMIZE TABLE `' . pSQL($table) . '`');
+    }
+
+    private function cleanGuests()
+    {
+        Db::getInstance()->execute(
+            'DELETE g FROM `' . _DB_PREFIX_ . 'guest` g
+            LEFT JOIN `' . _DB_PREFIX_ . 'cart` c ON c.id_guest = g.id_guest
+            LEFT JOIN `' . _DB_PREFIX_ . 'orders` o ON o.id_guest = g.id_guest
+            WHERE c.id_guest IS NULL
+              AND o.id_guest IS NULL'
+        );
     }
 
     private function cleanAbandonedCarts($id_shop)
