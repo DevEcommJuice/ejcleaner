@@ -25,7 +25,7 @@ class EjCleaner extends Module
     {
         $this->name = 'ejcleaner';
         $this->tab = 'administration';
-        $this->version = '1.5.2';
+        $this->version = '2.1';
         $this->author = 'EcommJuice';
         $this->need_instance = 0;
         $this->bootstrap = true;
